@@ -1,85 +1,122 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
+	"io"
 	"log"
 	"net"
+	"os"
+	"path/filepath"
 )
-
-type Message struct {
-        from string
-        data []byte
-}
 
 type Server struct {
 	listenAddr string
-	listner    net.Listener
-        quitchan   chan struct{}
-        msgchan    chan Message
+	listener   net.Listener
+	quitchan   chan struct{}
+	saveDir    string
 }
 
-func NewServer (listenAddr string) *Server {
-        return &Server {
-                listenAddr: listenAddr,
-                quitchan: make(chan struct{}),
-                msgchan: make(chan Message,10),
-        }
-}
-
-func (s* Server) Start() error {
-        ln,err := net.Listen("tcp", s.listenAddr)
-        if err != nil {
-                return err
-        }
-        
-        s.listner = ln
-
-        defer s.listner.Close()
-
-        go s.acceptLoop()
-
-        <-s.quitchan
-        close(s.msgchan)
-
-        return nil
-}
-
-func (s* Server) acceptLoop() {
-        for {
-                conn,err := s.listner.Accept()
-                if err != nil {
-                        fmt.Println("Accept error: ", err)
-                        continue
-                }  
-
-                fmt.Println("Accept connection: ", conn.RemoteAddr().String())
-
-                go s.readLoop(conn)
-        }
-}
-
-func (s *Server) readLoop(conn net.Conn) {
-	defer conn.Close()
-	reader := bufio.NewReader(conn)
-	for {
-		msg, err := reader.ReadString('\n')
-		if err != nil {
-			fmt.Println("Read error: ", err)
-			return 
-		}
-		fmt.Println("Read message: ", msg)
-                s.msgchan <- Message{from: conn.RemoteAddr().String(), data: []byte(msg)}
+func NewServer(listenAddr, saveDir string) *Server {
+	return &Server{
+		listenAddr: listenAddr,
+		quitchan:   make(chan struct{}),
+		saveDir:    saveDir,
 	}
 }
 
-func main() {
-        server := NewServer(":3000")
+func (s *Server) Start() error {
+	ln, err := net.Listen("tcp", s.listenAddr)
+	if err != nil {
+		return err
+	}
+	s.listener = ln
 
-        go func() {
-                for msg:= range server.msgchan {
-                        fmt.Printf("Message from (%s): %s\n", msg.from,string(msg.data))
-                }
-        } ()
-        log.Fatal(server.Start())
+	defer s.listener.Close()
+
+	go s.acceptLoop()
+
+	<-s.quitchan
+
+	return nil
+}
+
+func (s *Server) acceptLoop() {
+	for {
+		conn, err := s.listener.Accept()
+		if err != nil {
+			fmt.Println("Accept error:", err)
+			continue
+		}
+
+		fmt.Println("Accept connection:", conn.RemoteAddr().String())
+
+		go s.handleFileTransfer(conn)
+	}
+}
+
+func (s *Server) handleFileTransfer(conn net.Conn) {
+	defer conn.Close()
+
+	// Read the file name size
+	var fileNameSize int64
+	err := readInt64(conn, &fileNameSize)
+	if err != nil {
+		fmt.Println("Failed to read file name size:", err)
+		return
+	}
+
+	// Read the file name
+	fileName := make([]byte, fileNameSize)
+	_, err = io.ReadFull(conn, fileName)
+	if err != nil {
+		fmt.Println("Failed to read file name:", err)
+		return
+	}
+
+	// Read the file size
+	var fileSize int64
+	err = readInt64(conn, &fileSize)
+	if err != nil {
+		fmt.Println("Failed to read file size:", err)
+		return
+	}
+
+	// Ensure the save directory exists
+	err = os.MkdirAll(s.saveDir, os.ModePerm)
+	if err != nil {
+		fmt.Println("Failed to create save directory:", err)
+		return
+	}
+
+	// Create a new file to save the received data
+	outFile, err := os.Create(filepath.Join(s.saveDir, string(fileName)))
+	if err != nil {
+		fmt.Println("Failed to create file:", err)
+		return
+	}
+	defer outFile.Close()
+
+	// Read the file data
+	_, err = io.CopyN(outFile, conn, fileSize)
+	if err != nil {
+		fmt.Println("Failed to read file data:", err)
+		return
+	}
+
+	fmt.Println("File received successfully:", string(fileName))
+}
+
+func readInt64(conn net.Conn, n *int64) error {
+	buf := make([]byte, 8)
+	_, err := io.ReadFull(conn, buf)
+	if err != nil {
+		return err
+	}
+	*n = int64(buf[0]) | int64(buf[1])<<8 | int64(buf[2])<<16 | int64(buf[3])<<24 | int64(buf[4])<<32 | int64(buf[5])<<40 | int64(buf[6])<<48 | int64(buf[7])<<56
+	return nil
+}
+
+func main() {
+	server := NewServer(":3000", "received_files")
+	log.Fatal(server.Start())
 }
