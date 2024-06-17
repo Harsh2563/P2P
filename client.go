@@ -8,8 +8,8 @@ import (
 )
 
 func main() {
-	serverAddr := "localhost:3000"
-	filePath := "./Farewell 2k24.pdf" // Update this path to the file you want to send
+	serverAddr := "192.168.1.100:3000" // Replace with the server's IP address
+	filePath := "path/to/your/file"    // Update this path to the file you want to send
 
 	conn, err := net.Dial("tcp", serverAddr)
 	if err != nil {
