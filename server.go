@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
 )
 
 type Server struct {
@@ -14,6 +15,8 @@ type Server struct {
 	listener   net.Listener
 	quitchan   chan struct{}
 	saveDir    string
+	users      map[string]bool
+	mu         sync.Mutex
 }
 
 func NewServer(listenAddr, saveDir string) *Server {
@@ -21,6 +24,7 @@ func NewServer(listenAddr, saveDir string) *Server {
 		listenAddr: listenAddr,
 		quitchan:   make(chan struct{}),
 		saveDir:    saveDir,
+		users:      make(map[string]bool),
 	}
 }
 
@@ -48,15 +52,19 @@ func (s *Server) acceptLoop() {
 			continue
 		}
 
-		fmt.Println("Accept connection:", conn.RemoteAddr().String())
+		addr := conn.RemoteAddr().String()
+		fmt.Println("Accept connection:", addr)
 
-		go s.handleFileTransfer(conn)
+		s.saveUser(addr, true)
+		fmt.Println("Users: ", s.users)
+
+		go s.handleFileTransfer(conn, addr)
 	}
 }
 
-func (s *Server) handleFileTransfer(conn net.Conn) {
+func (s *Server) handleFileTransfer(conn net.Conn, addr string) {
 	defer conn.Close()
-
+	defer s.saveUser(addr, false)
 	// Read the file name size
 	var fileNameSize int64
 	err := readInt64(conn, &fileNameSize)
@@ -113,10 +121,18 @@ func readInt64(conn net.Conn, n *int64) error {
 		return err
 	}
 	*n = int64(buf[0]) | int64(buf[1])<<8 | int64(buf[2])<<16 | int64(buf[3])<<24 | int64(buf[4])<<32 | int64(buf[5])<<40 | int64(buf[6])<<48 | int64(buf[7])<<56
+
 	return nil
+}
+
+func (s *Server) saveUser(user string, online bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.users[user] = online
 }
 
 func main() {
 	server := NewServer(":3000", "received_files")
+	fmt.Println("Server running on address ", server.listenAddr)
 	log.Fatal(server.Start())
 }
